@@ -4,21 +4,21 @@ import SwiftUI
 
 open class HostingParentController: UIViewController {
     public var makeBackgroundsClear = true
-    
+
     /// If the touches land on the base view of the HostingParentController, they will be forwarded to this view if it is not nil.
     public var forwardBaseTouchesTo: UIView?
-    
+
     /// If the touches land on the bottom of a SwiftUI scroll container (*not* the content), pass through these touches to the UIKit layer underneath.
     public var ignoreTouchesOnSwiftUIScrollView = false
-    
+
     override public func loadView() {
         let capturer = HostingParentView()
         view = capturer
     }
-    
+
     public override func viewWillLayoutSubviews() {
         super.viewWillLayoutSubviews()
-        
+
         let capturer = view as! HostingParentView
         capturer.makeBackgroundsClear = makeBackgroundsClear
         capturer.forwardBaseTouchesTo = forwardBaseTouchesTo
@@ -32,13 +32,19 @@ open class HostingParentView: UIView {
     public var forwardBaseTouchesTo: UIView?
     public var makeBackgroundsClear = true
     public var ignoreTouchesOnSwiftUIScrollView = false
-    
+
     override public func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        guard let hitTest = super.hitTest(point, with: event) else { return nil }
-        
-        return checkBehind(view: hitTest, point: point, event: event)
+        guard let result = super.hitTest(point, with: event) else { return nil }
+
+        if #available(iOS 18, *), String(describing: type(of: result)).contains("_UIHostingView") {
+            // Check behind _UIHostingView and return result if nothing else is found
+            return checkBehind(view: result, point: point, event: event) ?? result
+        }
+
+        // For earlier iOS versions, or if the result is not _UIHostingView
+        return checkBehind(view: result, point: point, event: event)
     }
-    
+
     // what you need to know for this logic >
     //
     // in the view hierachy a UIHostingController has a private _UIHostingView that contains all the SwiftUI content.
@@ -48,7 +54,7 @@ open class HostingParentView: UIView {
     //
     // therefore we then should continue to check behind the _UIHostingView until we reach something underneath that isn't another _UIHostingView view.
     // this could either be a SwiftUI view with a weird class name like above OR a UIKit view.
-    
+
     private func checkBehind(view: UIView, point: CGPoint, event: UIEvent?) -> UIView? {
         // if the hittest lands on a hosting view, and it has user interaction enabled, we check behind it.
         // otherwise just return the view directly (this is almost definitely a UIKit view).
@@ -56,12 +62,12 @@ open class HostingParentView: UIView {
             // in order to check behind the _UIHostingView that captures all of the touches, we can tell it to stop accepting touches, then perform another hittest in the same location to see what's underneath it.
             view.isUserInteractionEnabled = false
             guard let hitBehind = super.hitTest(point, with: event) else { return nil }
-            
+
             // for some reason this causes a crash if we don't set it back on the main thread
             DispatchQueue.main.async {
                 view.isUserInteractionEnabled = true
             }
-            
+
             // if the view behind is another _UIHostingView, we check behind THAT, and the process continues until we land on something that isn't a _UIHostingView.
             if hostingViews.contains(hitBehind) {
                 return checkBehind(view: hitBehind, point: point, event: event)
@@ -89,35 +95,35 @@ open class HostingParentView: UIView {
                 } else {
                     return forwardBaseTouchesTo.hitTest(point, with: event)
                 }
-                
-            // if we are hitting the back of a scroll view, it's possible you might want to pass this touch through to the uikit layer underneath. scrolling is still possible when touching items, just not the bottom of the scroll view.
+
+                // if we are hitting the back of a scroll view, it's possible you might want to pass this touch through to the uikit layer underneath. scrolling is still possible when touching items, just not the bottom of the scroll view.
             } else if String(describing: view).contains("HostingScrollView"), view.isUserInteractionEnabled, ignoreTouchesOnSwiftUIScrollView {
                 view.isUserInteractionEnabled = false
-                
+
                 guard let hitBehindScrollView = super.hitTest(point, with: event) else { return nil }
-                
+
                 DispatchQueue.main.async {
                     view.isUserInteractionEnabled = true
                 }
-                
+
                 return checkBehind(view: hitBehindScrollView, point: point, event: event)
             } else {
                 return view
             }
         }
     }
-    
+
     override public func layoutSubviews() {
         super.layoutSubviews()
-        
+
         hostingViews = subviews.filter {
             // so it isn't exactly called _UIHostingView, and it's a private class, so we just check against the description of it.
             // reliable as of iOS 16.3 when this was made
             String(describing: $0.self).contains("_UIHostingView")
         }
-        
+
         guard makeBackgroundsClear else { return }
-        
+
         hostingViews.forEach {
             $0.backgroundColor = .clear
         }
